@@ -1,127 +1,137 @@
 # German Day-Ahead Power Price Forecasting
 
-A quantitative research project investigating whether renewable generation forecast
-errors can predict asymmetric price behaviour in the German day-ahead electricity market.
+A quantitative research project investigating whether renewable generation forecasts
+and lagged forecast errors can predict asymmetric price behaviour in the German
+day-ahead electricity market.
 
 ---
 
 ## Research Question
 
-When actual wind and solar generation deviates from day-ahead forecasts, the market
-has mispriced. Are these forecast errors a systematic predictor of price deviations —
-particularly for negative and spike price episodes?
+Day-ahead electricity prices are set the day before delivery based on generation
+forecasts. When actual renewable generation deviates from those forecasts, the market
+has mispriced supply. This project asks:
+
+> Can day-ahead renewable generation forecasts and lagged forecast errors predict
+> price asymmetries — particularly negative prices and price spikes?
 
 ---
 
-## Getting Started
+## Key Finding
 
-### Prerequisites
+All three models beat the naive benchmark across every price regime. The largest
+improvement is in the **negative price regime**, where XGBoost reduces MAE by 65%
+over the benchmark. This confirms that renewable generation forecasts carry
+systematic information about downside price risk that a simple lag model ignores.
 
-- Python 3.10 or higher
-- Git
+| Regime | N | Benchmark | LASSO | Random Forest | XGBoost | Best improvement |
+|---|---|---|---|---|---|---|
+| Normal | 11,868 | 29.66 | 23.24 | 16.02 | **14.78** | −50% |
+| Negative | 671 | 50.93 | 33.94 | 19.77 | **17.62** | −65% |
+| Spike | 660 | 72.47 | 56.79 | 53.18 | **47.97** | −34% |
 
-Check your Python version:
-
-```cmd
-python --version
-```
-
----
-
-### 1. Clone the repository
-
-```cmd
-git clone https://github.com/yourusername/power-price-forecast.git
-cd power-price-forecast
-```
+*All values in €/MWh MAE. Test period: July 2023 – December 2024.*
 
 ---
 
-### 2. Create and activate the virtual environment
+## Methodology
 
-```cmd
-python -m venv venv
-venv\Scripts\activate
-```
+### Data
+All data sourced from [SMARD](https://www.smard.de/en) — the German Federal Network
+Agency's electricity market data platform. Free, public, no registration required.
 
-Your terminal prompt should now show `(venv)` at the start.
-**You need to run this every time you open a new terminal.**
-
-To deactivate when you're done:
-
-```cmd
-deactivate
-```
-
----
-
-### 3. Install dependencies
-
-```cmd
-pip install -r requirements.txt
-```
-
----
-
-### 4. Set your ENTSO-E API key
-
-You need a free API key from [transparency.entsoe.eu](https://transparency.entsoe.eu).
-Request access by emailing transparency@entsoe.eu with your account email.
-
-Once you have the key, set it as an environment variable:
-
-```cmd
-set ENTSOE_API_KEY=your_token_here
-```
-
-To set it permanently, search for **"Edit environment variables for your account"**
-in the Windows Start menu, click **New**, and add:
-- Variable name: `ENTSOE_API_KEY`
-- Variable value: your token
-
-Verify it is set:
-
-```cmd
-python -c "import os; print(os.environ.get('ENTSOE_API_KEY'))"
-```
-
----
-
-### 5. Launch Jupyter
-
-```cmd
-jupyter lab
-```
-
-This opens in your browser. Run the notebooks in order:
-
-| Notebook | Description |
+| File | Description |
 |---|---|
-| `01_data_fetch.ipynb` | Fetch prices, generation, load and forecasts from ENTSO-E |
-| `02_eda.ipynb` | Explore price distributions and identify asymmetries |
-| `03_features.ipynb` | Engineer features from causal hypotheses |
-| `04_models.ipynb` | Train and evaluate LASSO and XGBoost models |
+| `day_ahead_prices_smard.csv` | Hourly DE/LU day-ahead prices (€/MWh) |
+| `generation_actual_smard.csv` | Actual generation by source (MWh) |
+| `generation_forecast_smard.csv` | Day-ahead generation forecast by source (MWh) |
+| `consumption_actual_smard.csv` | Actual grid load (MWh) |
+| `consumption_forecasts_smard.csv` | Forecasted grid load (MWh) |
+| `crossborder_smard.csv` | Cross-border physical flows by country (MWh) |
+
+Period: 01/01/2020 – 31/12/2024, hourly resolution, 43,843 observations.
+
+### Feature Engineering
+
+Features are constructed to be strictly available at prediction time (D-1).
+No actual generation values at time t are used — only day-ahead forecasts and
+lagged actuals.
+
+**Forecast-based features** (available at prediction time):
+- Forecasted renewable load ratio — wind + solar forecast as share of load forecast
+- Forecasted renewable surplus — excess renewable forecast over load forecast
+
+**Lagged forecast error features** (yesterday's errors, available at prediction time):
+- Wind onshore, wind offshore and solar forecast errors lagged 24h
+- Load forecast error lagged 24h
+- Net export lagged 24h
+
+**Calendar features:**
+- Hour of day and month encoded cyclically (sin/cos)
+- Weekend and peak hour indicators
+
+**Lagged price features:**
+- Prices at t-24h, t-48h, t-168h
+- 7-day rolling mean and standard deviation (computed on lagged prices)
+
+### Models
+
+Three models are trained and compared against a naive benchmark:
+
+- **Benchmark** — same hour one week ago (`price_lag_168h`)
+- **LASSO** — with standardisation and 5-fold time-series cross-validation,
+  selected for interpretability. Coefficients show which features survive
+  regularisation and in which direction.
+- **Random Forest** — 500 trees, max depth 10
+- **XGBoost** — 500 estimators, learning rate 0.05, early stopping on validation set
+
+### Evaluation
+
+The test set covers July 2023 – December 2024 (18 months, ~13,000 hours).
+Train/test split is strictly time-based — no random shuffling.
+
+Evaluation is split into three price regimes:
+- **Normal** — all hours outside the other two regimes
+- **Negative** — hours where actual price < 0 €/MWh
+- **Spike** — hours in the top 5th percentile of actual prices
+
+Overall MAE is insufficient for this problem. A model that predicts average prices
+well but misses negative and spike hours is useless for trading decisions. The
+regime-split table is the core result.
+
+---
+
+## Caveats
+
+**Spike regime:** Absolute errors remain high even for the best model (47.97 €/MWh).
+Extreme price spikes are often driven by gas supply shocks, cold snaps, or
+transmission constraints — events not captured by renewable forecast features alone.
+Adding TTF natural gas prices as a feature is the natural next step.
+
+**Data snooping:** An earlier version of this model used contemporaneous actual
+generation values as features, which constitutes look-ahead bias. All features in
+the current version are strictly constructed from information available at prediction
+time. Results are slightly better after fixing this, which suggests the day-ahead
+forecast itself — not the realised error — is the primary price signal.
 
 ---
 
 ## Project Structure
 
 ```
-power-price-forecast/
+Power-price-forecast/
 ├── data/
-│   ├── raw/               # raw data from ENTSO-E (gitignored)
-│   └── processed/         # feature-engineered data (gitignored)
+│   ├── raw/                   # original SMARD downloads, never modified
+│   └── processed/
+│       ├── merged_raw.parquet # cleaned and merged, all columns renamed
+│       └── features.parquet   # final feature set used for modelling
 ├── notebooks/
-│   ├── 01_data_fetch.ipynb
+│   ├── 01_load_and_inspect.ipynb
 │   ├── 02_eda.ipynb
 │   ├── 03_features.ipynb
 │   └── 04_models.ipynb
-├── src/
-│   ├── fetch.py           # data fetching functions
-│   ├── features.py        # feature engineering
-│   └── models.py          # model training and evaluation
 ├── results/
-│   └── figures/           # saved plots
+│   └── figures/
 ├── .gitignore
 ├── requirements.txt
 └── README.md
@@ -129,34 +139,29 @@ power-price-forecast/
 
 ---
 
-## Methodology
+## Setup
 
-1. **EDA** — confirm asymmetric price distribution and identify the driving mechanism
-2. **Feature engineering** — build features from causal hypotheses, not automated selection
-3. **Modelling** — LASSO for interpretability, XGBoost for performance
-4. **Evaluation** — regime-split evaluation across normal, negative and spike price hours
+```cmd
+git clone https://github.com/lhcseddon/power-price-forecast.git
+cd power-price-forecast
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
 
----
-
-## Data Source
-
-[ENTSO-E Transparency Platform](https://transparency.entsoe.eu) — free, public data on
-European power generation, load and prices.
-
----
-
-## Results
-
-*To be updated once modelling is complete.*
-
-| Model | MAE (€/MWh) | Spike MAE | Negative MAE |
-|---|---|---|---|
-| Naive benchmark | — | — | — |
-| LASSO | — | — | — |
-| XGBoost | — | — | — |
+Run notebooks in order: 01 → 02 → 03 → 04.
 
 ---
 
 ## Tools
 
-Python · pandas · scikit-learn · XGBoost · entsoe-py · matplotlib · JupyterLab
+Python · pandas · scikit-learn · XGBoost · matplotlib · JupyterLab · VSCode
+
+---
+
+## Next Steps
+
+1. **Add TTF gas prices** — gas sets the marginal price during high-demand hours.
+   Expected to improve spike regime performance significantly.
+2. **Intraday vs day-ahead spread** — same data, sharper question about whether
+   day-ahead forecast errors predict the intraday correction.
