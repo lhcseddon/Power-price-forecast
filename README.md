@@ -24,19 +24,44 @@ improvement is in the **negative price regime**, where XGBoost reduces MAE by 65
 over the benchmark. This confirms that renewable generation forecasts carry
 systematic information about downside price risk that a simple lag model ignores.
 
+Hyperparameter tuning via Optuna improved XGBoost MAE from 16.58 to 16.17 €/MWh
+and Random Forest from 18.07 to 16.98 €/MWh — modest gains suggesting the
+feature set is the primary driver of performance rather than model configuration.
+
 | Regime | N | Benchmark | LASSO | Random Forest | XGBoost | Best improvement |
 |---|---|---|---|---|---|---|
-| Normal | 11,868 | 29.66 | 23.24 | 16.02 | **14.78** | −50% |
-| Negative | 671 | 50.93 | 33.94 | 19.77 | **17.62** | −65% |
-| Spike | 660 | 72.47 | 56.79 | 53.18 | **47.97** | −34% |
+| Normal | 11,868 | 29.66 | 23.24 | 15.09 | **14.28** | −52% |
+| Negative | 671 | 50.93 | 33.94 | 18.29 | **17.74** | −65% |
+| Spike | 660 | 72.47 | 56.79 | 49.73 | **48.47** | −33% |
 
-*All values in €/MWh MAE. Test period: July 2023 – December 2024.*
+*All values in €/MWh MAE. Tree models use Optuna-tuned hyperparameters.
+Test period: July 2023 – December 2024 (~13,000 hours).*
+
+---
+
+## LASSO Coefficients
+
+LASSO provides an interpretable read of which features matter and in which direction.
+All non-zero coefficients are directionally consistent with the underlying mechanism:
+
+| Feature | Coefficient | Interpretation |
+|---|---|---|
+| `price_lag_24h` | +69.2 | Strong autocorrelation — yesterday's price is the dominant signal |
+| `ren_load_ratio_fc` | −28.3 | Higher forecasted renewable share → lower prices ✅ |
+| `price_lag_168h` | +16.9 | Same hour last week carries information |
+| `price_roll_7d_mean` | +14.0 | Recent price level anchors expectations |
+| `net_export_lag24` | +11.9 | High net exports signal tight neighbouring markets |
+| `price_roll_7d_std` | +8.6 | Recent volatility raises expected price level |
+| `is_weekend` | −7.1 | Lower industrial load on weekends → lower prices ✅ |
+| `wind_off_error_lag24` | −1.8 | More offshore wind than expected → lower prices ✅ |
+| `wind_on_error_lag24` | −1.0 | More onshore wind than expected → lower prices ✅ |
 
 ---
 
 ## Methodology
 
 ### Data
+
 All data sourced from [SMARD](https://www.smard.de/en) — the German Federal Network
 Agency's electricity market data platform. Free, public, no registration required.
 
@@ -54,8 +79,8 @@ Period: 01/01/2020 – 31/12/2024, hourly resolution, 43,843 observations.
 ### Feature Engineering
 
 Features are constructed to be strictly available at prediction time (D-1).
-No actual generation values at time t are used — only day-ahead forecasts and
-lagged actuals.
+No actual generation values at time t are used — only day-ahead forecasts
+and lagged actuals.
 
 **Forecast-based features** (available at prediction time):
 - Forecasted renewable load ratio — wind + solar forecast as share of load forecast
@@ -76,14 +101,16 @@ lagged actuals.
 
 ### Models
 
-Three models are trained and compared against a naive benchmark:
+| Model | MAE (€/MWh) | Notes |
+|---|---|---|
+| Benchmark | 32.88 | Same hour one week ago |
+| LASSO | 25.46 | Standardised, TimeSeriesSplit CV |
+| Random Forest | 16.98 | 581 trees, Optuna-tuned |
+| XGBoost | 16.17 | 480 estimators, Optuna-tuned |
 
-- **Benchmark** — same hour one week ago (`price_lag_168h`)
-- **LASSO** — with standardisation and 5-fold time-series cross-validation,
-  selected for interpretability. Coefficients show which features survive
-  regularisation and in which direction.
-- **Random Forest** — 500 trees, max depth 10
-- **XGBoost** — 500 estimators, learning rate 0.05, early stopping on validation set
+**Optuna tuning:** 100 trials for XGBoost, 50 for Random Forest, using TPE sampler.
+Best XGBoost params: `n_estimators=480, max_depth=6, learning_rate=0.021,
+subsample=0.61, colsample_bytree=0.89, min_child_weight=1, gamma=0.96`
 
 ### Evaluation
 
@@ -92,7 +119,7 @@ Train/test split is strictly time-based — no random shuffling.
 
 Evaluation is split into three price regimes:
 - **Normal** — all hours outside the other two regimes
-- **Negative** — hours where actual price < 0 €/MWh
+- **Negative** — hours where actual price < 0 €/MWh (671 hours, 5.1% of test set)
 - **Spike** — hours in the top 5th percentile of actual prices
 
 Overall MAE is insufficient for this problem. A model that predicts average prices
@@ -103,16 +130,16 @@ regime-split table is the core result.
 
 ## Caveats
 
-**Spike regime:** Absolute errors remain high even for the best model (47.97 €/MWh).
+**Spike regime:** Absolute errors remain high even for the best model (48.47 €/MWh).
 Extreme price spikes are often driven by gas supply shocks, cold snaps, or
 transmission constraints — events not captured by renewable forecast features alone.
-Adding TTF natural gas prices as a feature is the natural next step.
+Adding TTF natural gas prices is the natural next step.
 
 **Data snooping:** An earlier version of this model used contemporaneous actual
 generation values as features, which constitutes look-ahead bias. All features in
 the current version are strictly constructed from information available at prediction
-time. Results are slightly better after fixing this, which suggests the day-ahead
-forecast itself — not the realised error — is the primary price signal.
+time. Results improved after fixing this, suggesting the day-ahead forecast itself
+— not the realised error — is the primary price signal.
 
 ---
 
@@ -155,7 +182,7 @@ Run notebooks in order: 01 → 02 → 03 → 04.
 
 ## Tools
 
-Python · pandas · scikit-learn · XGBoost · matplotlib · JupyterLab · VSCode
+Python · pandas · scikit-learn · XGBoost · Optuna · matplotlib · JupyterLab · VSCode
 
 ---
 
@@ -163,5 +190,7 @@ Python · pandas · scikit-learn · XGBoost · matplotlib · JupyterLab · VSCod
 
 1. **Add TTF gas prices** — gas sets the marginal price during high-demand hours.
    Expected to improve spike regime performance significantly.
-2. **Intraday vs day-ahead spread** — same data, sharper question about whether
+2. **LSTM** — capture temporal dependencies beyond lagged features using a
+   sequence model.
+3. **Intraday vs day-ahead spread** — same data, sharper question about whether
    day-ahead forecast errors predict the intraday correction.
