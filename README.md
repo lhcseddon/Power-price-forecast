@@ -14,7 +14,7 @@ When actual renewable generation deviates from those forecasts, the market has m
 supply. This project tests two related hypotheses:
 
 > 1. Do day-ahead renewable generation forecasts and lagged forecast errors predict price
->    asymmetries — particularly negative prices and spikes?
+>    asymmetries in particularly negative prices and spikes?
 > 2. Can the full conditional distribution of price be forecast in a calibrated way?
 
 ---
