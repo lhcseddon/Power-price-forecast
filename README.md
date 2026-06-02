@@ -1,9 +1,9 @@
 # German Day-Ahead Power Price Forecasting
 
-A quantitative research project on the German day-ahead electricity market. It starts from a
-causal hypothesis about renewable-driven price asymmetries, builds and tunes point-forecasting
-models, and then extends to research-grade **probabilistic forecasting** with proper
-distributional evaluation, literature benchmarks, statistical testing, and rolling backtests.
+A quantitative research project investigating asymmetric price behaviour in the German
+day-ahead electricity market. It covers point forecasting, hyperparameter tuning, and
+probabilistic forecasting with conformal calibration, literature benchmarks, statistical
+testing, and rolling backtests.
 
 ---
 
@@ -11,18 +11,17 @@ distributional evaluation, literature benchmarks, statistical testing, and rolli
 
 Day-ahead electricity prices are set the day before delivery based on generation forecasts.
 When actual renewable generation deviates from those forecasts, the market has mispriced
-supply. This project asks:
+supply. This project tests two related hypotheses:
 
-> Can day-ahead renewable generation forecasts and lagged forecast errors predict price
-> asymmetries — and can the full distribution of price be forecast in a calibrated, defensible
-> way?
+> 1. Do day-ahead renewable generation forecasts and lagged forecast errors predict price
+>    asymmetries — particularly negative prices and spikes?
+> 2. Can the full conditional distribution of price be forecast in a calibrated way?
 
 ---
 
-## Headline Results
+## Results
 
-**Point forecasting (notebook 04).** Across a regime-split evaluation, XGBoost beats a naive
-benchmark in every regime, with the largest gain in the negative price regime (−65% MAE).
+**Point forecasting (notebook 04)**
 
 | Regime | N | Benchmark | LASSO | Random Forest | XGBoost |
 |---|---|---|---|---|---|
@@ -30,44 +29,21 @@ benchmark in every regime, with the largest gain in the negative price regime (�
 | Negative | 671 | 50.93 | 33.94 | 18.29 | **17.74** |
 | Spike | 660 | 72.47 | 56.79 | 49.73 | **48.47** |
 
-*€/MWh MAE. Tree models Optuna-tuned.*
+*€/MWh MAE. Benchmark = same hour one week ago. Tree models Optuna-tuned.*
 
-**Probabilistic forecasting (notebook 05).** LightGBM quantile regression is the best
-distributional model, significantly outperforming both the LEAR literature benchmark and a
-distributional DNN.
+**Probabilistic forecasting (notebook 05)**
 
 | Model | Mean pinball ↓ | Median MAE ↓ | Notes |
 |---|---|---|---|
-| LEAR (literature benchmark) | 6.916 | 21.44 | asinh transform + LASSO |
+| LEAR (literature benchmark) | 6.92 | 21.44 | asinh transform + LASSO |
 | **LightGBM quantile** | **5.16** | **15.91** | best at every quantile |
-| Distributional DNN | 6.01 | 18.87 | competitive but behind on tabular data |
+| Distributional DNN | 6.01 | 18.87 | feedforward, multi-quantile pinball loss |
 
 - **Exact CRPS:** 12.31
-- **Calibration:** raw 90% prediction interval covered only 72.5% — overconfident. Conformalized
-  Quantile Regression (CQR) restored coverage to 87.7%.
-- **Statistical significance (Diebold-Mariano):** LightGBM beats LEAR (DM = −10.46, p < 0.0001)
-  and the DNN (DM = −8.39, p < 0.0001); DNN beats LEAR (DM = −4.44, p < 0.0001).
-- **Stability (rolling backtest):** median monthly MAE 15.69 €/MWh (range 7.59–94.92); the
-  single large outlier is the 2021–2022 energy crisis.
-
----
-
-## What Makes This More Than a Tutorial
-
-- **Leakage-free feature design.** Every feature is constructed from information available at
-  prediction time (day-ahead forecasts and lagged actuals). An earlier version that used
-  contemporaneous actual generation was identified as look-ahead bias and corrected.
-- **Distributional forecasting done correctly.** Evaluated with pinball loss, CRPS and
-  calibration — not MAE applied to intervals.
-- **Conformal prediction.** Diagnosed overconfident intervals and repaired them with CQR,
-  including an honest treatment of why the conformal guarantee is only approximate on
-  non-stationary price data.
-- **Literature benchmarks.** Implements LEAR (Lago et al.) and a distributional DNN, and
-  explains why gradient boosting wins on tabular data.
-- **Statistical testing.** Every model comparison is validated with a Diebold-Mariano test
-  (Harvey-Leybourne-Newbold corrected), not eyeballed.
-- **Rolling-window backtesting.** Performance evaluated as a distribution over time, isolating
-  the exact market regime where the model breaks down.
+- **Calibration:** raw 90% prediction interval covered 72.5%; CQR restored coverage to 87.7%
+- **Diebold-Mariano:** LightGBM vs LEAR (DM = −10.46, p < 0.0001); LightGBM vs DNN
+  (DM = −8.39, p < 0.0001); DNN vs LEAR (DM = −4.44, p < 0.0001)
+- **Rolling backtest:** median monthly MAE 15.69 €/MWh (range 7.59–94.92)
 
 ---
 
@@ -75,9 +51,9 @@ distributional DNN.
 
 ### Data
 
-All data from [SMARD](https://www.smard.de/en), the German Federal Network Agency's electricity
-market platform. Free, public, no registration. Period 01/01/2020 – 31/12/2024, hourly,
-43,843 observations.
+All data from [SMARD](https://www.smard.de/en), the German Federal Network Agency's
+electricity market platform. Free, public, no registration required. Period 01/01/2020 –
+31/12/2024, hourly, 43,843 observations after cleaning.
 
 | File | Description |
 |---|---|
@@ -88,36 +64,52 @@ market platform. Free, public, no registration. Period 01/01/2020 – 31/12/2024
 | `consumption_forecasts_smard.csv` | Forecasted grid load (MWh) |
 | `crossborder_smard.csv` | Cross-border physical flows by country (MWh) |
 
-### Features
+### Feature engineering
 
-Forecast-based (available at prediction time): forecasted renewable load ratio and renewable
-surplus. Lagged forecast errors (yesterday's, available at prediction time): wind onshore,
-wind offshore, solar and load forecast errors, plus net export. Calendar: cyclically encoded
-hour and month, weekend and peak indicators. Lagged prices: t-24h, t-48h, t-168h, and 7-day
-rolling mean and standard deviation.
+All features are constructed from information available at prediction time (D-1). No
+contemporaneous actual generation values are used.
+
+- **Forecast-based:** forecasted renewable load ratio, forecasted renewable surplus
+- **Lagged forecast errors (t−24h):** wind onshore, wind offshore, solar, load, net export
+- **Calendar:** cyclically encoded hour and month, weekend and peak hour indicators
+- **Lagged prices:** t−24h, t−48h, t−168h, 7-day rolling mean and standard deviation
 
 ### Models
 
-Point: naive benchmark, LASSO, Random Forest, XGBoost (Optuna-tuned).
-Probabilistic: LightGBM quantile regression, LEAR, distributional DNN (PyTorch, multi-quantile
-pinball loss). Conformal calibration via CQR.
+**Point:** naive benchmark, LASSO (TimeSeriesSplit CV), Random Forest, XGBoost (all
+tree models Optuna-tuned with 100 and 50 trials respectively).
+
+**Probabilistic:** LightGBM quantile regression (one model per quantile, monotonicity
+enforced), LEAR (asinh-transformed + LASSO), distributional DNN (PyTorch, two hidden
+layers, simultaneous multi-quantile pinball loss). Conformal calibration via CQR (Romano
+et al., 2019).
 
 ### Evaluation
 
-Strictly time-based train/test split (no shuffling). Point forecasts evaluated by regime-split
-MAE; probabilistic forecasts by pinball loss, CRPS and interval coverage. Model comparisons
-tested with Diebold-Mariano. Stability assessed by rolling-window monthly recalibration.
+Strictly time-based train/test split (July 2023 – December 2024 test period). Point
+forecasts evaluated by regime-split MAE across normal, negative and spike price hours.
+Probabilistic forecasts evaluated by pinball loss, exact CRPS (properscoring), and
+prediction interval coverage. Pairwise model comparisons tested with Diebold-Mariano
+(Harvey-Leybourne-Newbold corrected, h=24). Temporal stability assessed via rolling
+two-year window with monthly recalibration.
 
 ---
 
 ## Caveats
 
-- **Spike regime.** Absolute errors stay high for the hardest prices; these are driven by gas
-  shocks and grid constraints outside the current feature set. Adding TTF gas prices is the
-  natural next step.
-- **Conformal coverage.** CQR improves but does not perfectly reach nominal coverage because
-  electricity prices are non-stationary and violate the exchangeability assumption. A
-  time-series-aware conformal method would close the gap.
+**Spike regime.** Forecast errors remain high (XGBoost 48.47 €/MWh MAE on spikes).
+Extreme price events are largely driven by gas supply shocks and transmission constraints
+not captured by renewable generation features. Adding TTF natural gas prices is the
+natural extension.
+
+**Conformal coverage.** CQR coverage (87.7%) falls short of the nominal 90% target.
+Electricity prices are non-stationary, which violates the exchangeability assumption
+underlying the conformal guarantee. A time-series-aware conformal method (e.g. adaptive
+conformal inference, Gibbs & Candès 2021) would address this.
+
+**Rolling backtest outlier.** The maximum monthly MAE of 94.92 €/MWh corresponds to
+the 2021–2022 European energy crisis. Price behaviour during that period was driven by
+factors outside the model's feature set.
 
 ---
 
@@ -165,9 +157,10 @@ Python · pandas · scikit-learn · XGBoost · LightGBM · PyTorch · Optuna · 
 
 ## References
 
-- Lago, Marcjasz, De Schutter & Weron (2021). *Forecasting day-ahead electricity prices: A
-  review of state-of-the-art algorithms, best practices and an open-access benchmark.*
+- Lago, Marcjasz, De Schutter & Weron (2021). *Forecasting day-ahead electricity prices:
+  A review of state-of-the-art algorithms, best practices and an open-access benchmark.*
   Applied Energy.
-- Nowotarski & Weron (2018). *Recent advances in electricity price forecasting: A review of
-  probabilistic forecasting.* Renewable and Sustainable Energy Reviews.
+- Nowotarski & Weron (2018). *Recent advances in electricity price forecasting: A review
+  of probabilistic forecasting.* Renewable and Sustainable Energy Reviews.
 - Romano, Patterson & Candès (2019). *Conformalized Quantile Regression.* NeurIPS.
+- Gibbs & Candès (2021). *Adaptive Conformal Inference Under Distribution Shift.* NeurIPS.
